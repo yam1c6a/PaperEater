@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PaperEater — Latest AI Papers</title>
+
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --link: #58a6ff;
+      --btn: #238636;
+      --btn-hover: #2ea043;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    #header {
+      background: var(--panel);
+      padding: 20px;
+      text-align: center;
+      font-size: 24px;
+    }
+
+    #status {
+      text-align: center;
+      padding: 30px 16px;
+      font-size: 18px;
+      color: #f0f6fc;
+    }
+
+    #list {
+      padding: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .paper {
+      background: var(--panel);
+      margin: 20px 0;
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+
+    .title { margin-bottom: 10px; }
+
+    .title-en {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--link);
+      margin-bottom: 6px;
+      line-height: 1.35;
+    }
+
+    .title-ja {
+      font-size: 14px;
+      color: var(--text);
+      opacity: 0.95;
+      line-height: 1.45;
+      min-height: 1.2em;
+    }
+
+    .authors {
+      color: var(--muted);
+      font-size: 15px;
+      margin-bottom: 8px;
+      line-height: 1.4;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 14px;
+      line-height: 1.4;
+    }
+
+    .btn {
+      background: var(--btn);
+      padding: 8px 16px;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      margin-right: 10px;
+    }
+
+    .btn:hover { background: var(--btn-hover); }
+
+    /* Progress modal (visible only during download) */
+    #progress-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+
+    #progress-box {
+      background: var(--panel);
+      padding: 24px 20px 18px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      width: 320px;
+      text-align: center;
+    }
+
+    #progress-text {
+      color: var(--text);
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+
+    #progress-bar-wrap {
+      width: 100%;
+      height: 10px;
+      background: var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    #progress-bar {
+      width: 0%;
+      height: 100%;
+      background: var(--btn);
+      transition: width 0.08s linear;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="header">PaperEater — Latest AI Papers</div>
+  <div id="status">Fetching latest AI papers from arXiv…</div>
+  <div id="list"></div>
+
+  <div id="progress-modal">
+    <div id="progress-box">
+      <div id="progress-text">Downloading PDF… 0%</div>
+      <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { fetch } from "@tauri-apps/plugin-http";
+    import { openUrl } from "@tauri-apps/plugin-opener";
+    import { downloadDir, join } from "@tauri-apps/api/path";
+    import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
+
+    const STATUS = document.getElementById("status");
+    const LIST = document.getElementById("list");
+
+    // Progress UI
+    const PROGRESS_MODAL = document.getElementById("progress-modal");
+    const PROGRESS_TEXT = document.getElementById("progress-text");
+    const PROGRESS_BAR = document.getElementById("progress-bar");
+
+    function showProgress(percent) {
+      const p = Math.max(0, Math.min(100, Math.floor(percent)));
+      PROGRESS_MODAL.style.display = "flex";
+      PROGRESS_BAR.style.width = p + "%";
+      PROGRESS_TEXT.textContent = `Downloading PDF… ${p}%`;
+    }
+
+    function hideProgress() {
+      PROGRESS_BAR.style.width = "0%";
+      PROGRESS_TEXT.textContent = "Downloading PDF… 0%";
+      PROGRESS_MODAL.style.display = "none";
+    }
+
+    // Keywords for filtering
+    const KEYWORD_PATTERNS = [
+      /\bai\b/i, /\bartificial intelligence\b/i, /\bagi\b/i, /\basi\b/i,
+      /\bgeneral intelligence\b/i, /\bsuperintelligence\b/i,
+      /\blarge language model\b/i, /\bllm\b/i,
+      /\bopenai\b/i, /\bgpt\b/i, /\bchatgpt\b/i, /\bo1\b/i,
+      /\banthropic\b/i, /\bclaude\b/i, /\bdeepmind\b/i, /\bgemini\b/i,
+      /\bmistral\b/i, /\bllama\b/i, /\bmeta\b/i, /\bcohere\b/i,
+      /\bx-ai\b/i, /\bgrok\b/i,
+      /\bsora\b/i, /\bdiffusion\b/i, /\btext-to-video\b/i, /\btext to video\b/i,
+      /\btext-to-image\b/i, /\btext to image\b/i, /\bvision-language\b/i,
+      /\bvlm\b/i, /\bmultimodal\b/i, /\brag\b/i, /\bretrieval-augmented\b/i,
+      /\balignment\b/i
+    ];
+
+    function isInterestingPaper(paper) {
+      const text = (paper.title || "") + " " + (paper.authors || "") + " " + (paper.submitted || "");
+      return KEYWORD_PATTERNS.some((re) => re.test(text));
+    }
+
+    // DeepL API key (optional)
+    // Put your DeepL API key here to enable Japanese title translation
+    const DEEPL_API_KEY = "";
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function sanitizeFileName(input) {
+      const base = (input || "paper").trim().replace(/\s+/g, "_");
+      const safe = base.replace(/[\\/:*?"<>|]/g, "_").slice(0, 160);
+      return safe.length ? safe : "paper";
+    }
+
+    function toFileUrl(path) {
+      const p = String(path).replace(/\\/g, "/");
+      return "file:///" + encodeURI(p);
+    }
+
+    async function translateTitleToJa(text) {
+      const isFree = String(DEEPL_API_KEY).includes(":fx");
+      const endpoint = isFree ? "https://api-free.deepl.com/v2/translate" : "https://api.deepl.com/v2/translate";
+
+      const params = new URLSearchParams();
+      params.set("auth_key", DEEPL_API_KEY);
+      params.set("text", text);
+      params.set("target_lang", "JA");
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString()
+      });
+
+      const data = await res.json();
+      return String(data?.translations?.[0]?.text ?? "");
+    }
+
+    async function translateVisibleTitles() {
+      if (!DEEPL_API_KEY) {
+        return;
+      }
+
+      const blocks = Array.from(document.querySelectorAll("[data-title-en]"));
+      for (const block of blocks) {
+        const en = (block.getAttribute("data-title-en") || "").trim();
+        const outEl = block.querySelector(".title-ja");
+        if (!en || !outEl) continue;
+
+        outEl.textContent = "Translating to Japanese…";
+        try {
+          const ja = await translateTitleToJa(en);
+          outEl.textContent = ja || "";
+        } catch (e) {
+          console.error("DeepL translate failed", e);
+          outEl.textContent = "";
+        }
+      }
+    }
+
+    function render(papers) {
+      if (!papers || papers.length === 0) {
+        LIST.innerHTML = "<p>No matching papers found.</p>";
+        return;
+      }
+
+      LIST.innerHTML = papers.map((p) => {
+        const safeTitle = escapeHtml(p.title);
+        const safeAuthors = escapeHtml(p.authors);
+        const safeMeta = escapeHtml(p.submitted);
+        const safePdfUrl = String(p.pdfUrl ?? "").replaceAll("'", "\\'");
+
+        return `
+          <div class="paper" data-title-en="${safeTitle}">
+            <div class="title">
+              <div class="title-en">${safeTitle}</div>
+              <div class="title-ja"></div>
+            </div>
+            <div class="authors">${safeAuthors}</div>
+            <div class="meta">${safeMeta}</div>
+            <button class="btn" onclick="openPdfExternal('${safePdfUrl}')">Open PDF</button>
+            <button class="btn" onclick="downloadPDF('${safePdfUrl}', '${safeTitle}')">Save PDF</button>
+          </div>
+        `;
+      }).join("");
+
+      translateVisibleTitles().catch((e) => console.error("translateVisibleTitles error", e));
+    }
+
+    window.openPdfExternal = async (url) => {
+      try {
+        await openUrl(url);
+      } catch (e) {
+        console.error("openPdfExternal error", e);
+        alert("Failed to open PDF in external browser.");
+      }
+    };
+
+    window.downloadPDF = async (url, title) => {
+      const fileName = sanitizeFileName(title) + ".pdf";
+
+      try {
+        showProgress(0);
+
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+
+        const total = Number(res.headers.get("content-length") || 0);
+        const reader = res.body?.getReader?.();
+        const chunks = [];
+        let received = 0;
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              chunks.push(value);
+              received += value.length;
+              if (total > 0) showProgress((received / total) * 100);
+            }
+          }
+        } else {
+          const buf = new Uint8Array(await res.arrayBuffer());
+          chunks.push(buf);
+          showProgress(100);
+        }
+
+        const size = chunks.reduce((acc, c) => acc + c.length, 0);
+        const out = new Uint8Array(size);
+        let offset = 0;
+        for (const c of chunks) { out.set(c, offset); offset += c.length; }
+
+        await writeFile(fileName, out, { baseDir: BaseDirectory.Download });
+
+        const dl = await downloadDir();
+        const fullPath = await join(dl, fileName);
+
+        hideProgress();
+
+        // Auto-open Downloads folder after saving
+        try {
+          await openUrl(toFileUrl(dl));
+        } catch (e) {
+          console.error("Auto-open Downloads failed", e);
+        }
+      } catch (e) {
+        console.error("downloadPDF error", e);
+        hideProgress();
+        alert("Failed to download PDF.");
+      }
+    };
+
+    async function loadRecent2000() {
+      STATUS.textContent = "Fetching latest AI papers from arXiv…";
+      const url = "https://arxiv.org/list/cs/recent?skip=0&show=2000";
+
+      try {
+        const response = await fetch(url);
+
+        const html = await response.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, "text/html");
+
+        const dlNodes = Array.from(doc.querySelectorAll("dl"));
+        if (dlNodes.length === 0) {
+          STATUS.textContent = "No paper list found (HTML structure may have changed)";
+          return;
+        }
+
+        const papers = [];
+        for (const dl of dlNodes) {
+          const dts = dl.querySelectorAll("dt");
+          const dds = dl.querySelectorAll("dd");
+          const len = Math.min(dts.length, dds.length);
+
+          for (let i = 0; i < len; i++) {
+            const dt = dts[i];
+            const dd = dds[i];
+            if (!dt || !dd) continue;
+
+            const absLink = dt.querySelector('a[title="Abstract"]');
+            if (!absLink) continue;
+
+            const absPath = absLink.getAttribute("href") || "";
+            const absUrl = "https://arxiv.org" + absPath;
+            const pdfUrl = absUrl.replace("/abs/", "/pdf/") + ".pdf";
+
+            const titleEl = dd.querySelector(".list-title");
+            const authorsEl = dd.querySelector(".list-authors");
+            const submittedEl = dd.querySelector(".list-submitted");
+
+            const title = titleEl ? titleEl.textContent.replace("Title:", "").trim() : "(no title)";
+            const authors = authorsEl ? authorsEl.textContent.replace("Authors:", "").trim() : "";
+            const submitted = submittedEl ? submittedEl.textContent.trim() : "";
+
+            papers.push({ title, authors, submitted, absUrl, pdfUrl });
+          }
+        }
+
+        const filtered = papers.filter(isInterestingPaper);
+        STATUS.textContent = `Found ${filtered.length} papers`;
+        render(filtered);
+      } catch (e) {
+        console.error(e);
+        STATUS.textContent = "Failed to fetch papers: " + String(e);
+      }
+    }
+
+    loadRecent2000();
+  </script>
+</body>
+</html>
