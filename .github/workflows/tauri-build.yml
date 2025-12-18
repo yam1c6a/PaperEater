@@ -1,4 +1,4 @@
-name: Build PaperEater (Win + macOS)
+name: Build PaperEater (Windows + macOS + Linux)
 
 on:
   workflow_dispatch:
@@ -14,18 +14,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Debug npm scripts
+        shell: bash
+        run: |
+          pwd
+          ls -la
+          node -v
+          npm -v
+          test -f package.json && cat package.json | head -n 60
+          npm run
 
       - name: Install dependencies
+        shell: bash
         run: |
-          if (Test-Path package-lock.json) { npm ci } else { npm install }
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
       - name: Build PaperEater (Windows)
-        run: npm run tauri build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri -- build
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -40,24 +57,91 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Debug npm scripts
+        shell: bash
+        run: |
+          pwd
+          ls -la
+          node -v
+          npm -v
+          test -f package.json && cat package.json | head -n 60
+          npm run
 
       - name: Install dependencies
+        shell: bash
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
       - name: Build PaperEater (macOS)
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: npm run tauri build
+        run: npm run tauri -- build
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: PaperEater-macos
+          path: src-tauri/target/release/bundle/**
+
+  build-linux:
+    name: Build for Linux
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Debug npm scripts
+        shell: bash
+        run: |
+          pwd
+          ls -la
+          node -v
+          npm -v
+          test -f package.json && cat package.json | head -n 60
+          npm run
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Build PaperEater (Linux)
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri -- build
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaperEater-linux
           path: src-tauri/target/release/bundle/**
